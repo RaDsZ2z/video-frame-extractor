@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>序列帧提取工具</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: "Microsoft YaHei", sans-serif; background: #1e1e1e; color: #ddd;
+         max-width: 1100px; margin: 0 auto; padding: 20px; }
+  h1 { font-size: 20px; } h2 { font-size: 16px; color: #7ec8ff; margin-top: 28px;
+         border-left: 4px solid #7ec8ff; padding-left: 8px; }
+  .card { background: #2a2a2a; border-radius: 8px; padding: 16px; margin-top: 10px; }
+  label { font-size: 13px; margin-right: 6px; }
+  input[type=number], input[type=text] { background: #1e1e1e; color: #ddd;
+         border: 1px solid #555; border-radius: 4px; padding: 4px 6px; width: 70px; }
+  button { background: #3a7bd5; color: #fff; border: 0; border-radius: 5px;
+           padding: 7px 16px; cursor: pointer; font-size: 14px; margin-right: 8px; }
+  button:hover { background: #4a8ce5; } button:disabled { background: #555; cursor: default; }
+  button.ghost { background: #444; }
+  #status { font-size: 13px; color: #9d9; margin-left: 8px; white-space: pre-wrap; }
+  .err { color: #ff7b7b !important; }
+  .row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 8px 0; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+          gap: 8px; margin-top: 12px; max-height: 520px; overflow-y: auto; }
+  .cell { position: relative; cursor: pointer; border: 2px solid transparent;
+          border-radius: 4px; overflow: hidden; background: #ff00ff; }
+  .cell img { width: 100%; display: block; }
+  .cell .num { position: absolute; left: 0; bottom: 0; background: rgba(0,0,0,.65);
+               color: #ffe14d; font-size: 12px; padding: 1px 5px; }
+  .cell.sel { border-color: #ffe14d; }
+  .cell.sel::after { content: "✓"; position: absolute; right: 4px; top: 2px;
+                     color: #ffe14d; font-weight: bold; }
+  img.result { max-width: 100%; margin-top: 12px; border-radius: 6px; background: #444; }
+  .hidden { display: none; }
+  .pairs { font-size: 13px; color: #bbb; word-break: break-all; }
+</style>
+</head>
+<body>
+<h1>序列帧提取工具（视频 → PNG → 挑帧 → 预览）</h1>
+
+<h2>1. 上传视频并抽帧</h2>
+<div class="card">
+  <div class="row">
+    <input type="file" id="file" accept="video/mp4,video/*">
+    <label><input type="checkbox" id="green"> 绿幕抠图</label>
+  </div>
+  <div class="row" id="greenOpts" style="display:none">
+    <label>幕布颜色
+    <input type="text" id="colorHex" value="#00ff00" style="width:80px" title="十六进制颜色，如 #FFFFFF">
+    <span style="margin:0 2px 0 8px">R</span><input type="number" id="cR" value="0" min="0" max="255" style="width:56px">
+    <span style="margin:0 2px">G</span><input type="number" id="cG" value="255" min="0" max="255" style="width:56px">
+    <span style="margin:0 2px">B</span><input type="number" id="cB" value="0" min="0" max="255" style="width:56px">
+    <span id="swatch" title="当前抠图颜色" style="display:inline-block;width:22px;height:22px;
+          background:#00ff00;border:1px solid #888;border-radius:4px;vertical-align:middle;margin-left:6px"></span></label>
+    <label>容差 <input type="text" id="similarity" value="0.08"></label>
+    <label>柔化 <input type="text" id="blend" value="0.02"></label>
+  </div>
+  <div class="row" id="videoRow" style="display:none">
+    <video id="video" controls muted style="max-width:480px;max-height:320px;cursor:crosshair"></video>
+    <span style="font-size:13px;color:#bbb">可播放/暂停定位画面，点击画面中任意位置取该点颜色作为幕布颜色</span>
+  </div>
+  <div class="row">
+    <button id="btnExtract">开始抽帧</button><span id="status"></span>
+  </div>
+</div>
+
+<div id="step2" class="hidden">
+<h2>2. 挑帧</h2>
+<div class="card">
+  <div class="row">
+    <button id="btnSheet" class="ghost">生成总览拼图</button>
+    <button id="btnDiff" class="ghost">帧差异分析</button>
+    <button id="btnAll" class="ghost">全选</button>
+    <button id="btnNone" class="ghost">清空选择</button>
+    <span id="selInfo" style="font-size:13px;color:#ffe14d"></span>
+  </div>
+  <div id="sheetBox"></div>
+  <div id="diffBox"></div>
+  <div id="grid"></div>
+</div>
+
+<h2>3. 预览动画</h2>
+<div class="card">
+  <div class="row">
+    <label>帧率 <input type="number" id="fps" value="12" min="1" max="60"></label>
+    <button id="btnPreview">生成预览 GIF</button>
+  </div>
+  <div id="gifBox"></div>
+</div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let frames = [], selected = new Set();
+
+const pad = n => String(n).padStart(5, '0');
+const status = (msg, isErr) => { $('status').textContent = msg;
+  $('status').className = isErr ? 'err' : ''; };
+
+$('green').onchange = e => $('greenOpts').style.display = e.target.checked ? 'flex' : 'none';
+
+// 幕布颜色：hex 输入框与 R/G/B 三个数值框双向同步，色块联动。
+// 接受 #FFFFFF / FFFFFF / 0xFFFFFF；返回规范化后的 #RRGGBB，非法返回 null
+function parseHex(v) {
+  v = v.trim().replace(/^0x/i, '');
+  if (!v.startsWith('#')) v = '#' + v;
+  return /^#[0-9a-fA-F]{6}$/.test(v) ? v : null;
+}
+function hexColor() { return parseHex($('colorHex').value); }
+
+function setColor(hex) {          // 统一的落点：三处输入 + 色块一起更新
+  const n = parseInt(hex.slice(1), 16);
+  $('colorHex').value = hex;
+  $('cR').value = (n >> 16) & 255;
+  $('cG').value = (n >> 8) & 255;
+  $('cB').value = n & 255;
+  $('swatch').style.background = hex;
+}
+
+$('colorHex').oninput = () => {   // hex 框变动 -> 同步 RGB 框和色块
+  const c = hexColor();
+  $('colorHex').style.borderColor = c ? '#555' : '#ff7b7b';
+  if (c) setColor(c);
+};
+const onRgb = () => {             // RGB 框变动 -> 同步 hex 框和色块
+  const ch = [$('cR'), $('cG'), $('cB')].map(el => el.value === '' ? NaN : +el.value);
+  const bad = ch.some(n => isNaN(n) || n < 0 || n > 255);
+  [$('cR'), $('cG'), $('cB')].forEach(el => el.style.borderColor = bad ? '#ff7b7b' : '#555');
+  if (!bad) {
+    const hex = '#' + ch.map(n => n.toString(16).padStart(2, '0')).join('');
+    $('colorHex').value = hex;
+    $('colorHex').style.borderColor = '#555';
+    $('swatch').style.background = hex;
+  }
+};
+$('cR').oninput = $('cG').oninput = $('cB').oninput = onRgb;
+
+// 选好视频后本地预览，点击画面取该像素颜色
+$('file').onchange = e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  $('video').src = URL.createObjectURL(f);
+  $('videoRow').style.display = 'flex';
+};
+$('video').onclick = e => {
+  const v = e.target;
+  if (!v.videoWidth) return;
+  const r = v.getBoundingClientRect();
+  // 视频画面在元素内是按比例居中显示的，算出实际画面区域
+  const scale = Math.min(r.width / v.videoWidth, r.height / v.videoHeight);
+  const vw = v.videoWidth * scale, vh = v.videoHeight * scale;
+  const ox = (r.width - vw) / 2, oy = (r.height - vh) / 2;
+  const x = Math.floor((e.clientX - r.left - ox) / scale);
+  const y = Math.floor((e.clientY - r.top - oy) / scale);
+  if (x < 0 || y < 0 || x >= v.videoWidth || y >= v.videoHeight) return;
+  const c = document.createElement('canvas');
+  c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext('2d').drawImage(v, 0, 0);
+  const [rr, gg, bb] = c.getContext('2d').getImageData(x, y, 1, 1).data;
+  const hex = '#' + [rr, gg, bb].map(n => n.toString(16).padStart(2, '0')).join('');
+  setColor(hex);
+  $('colorHex').style.borderColor = '#555';
+};
+
+$('btnExtract').onclick = async () => {
+  const f = $('file').files[0];
+  if (!f) return status('请先选择视频文件', true);
+  const color = hexColor();
+  if (!color) return status('幕布颜色格式不正确：hex 需为 #FFFFFF 形式，或改用 R/G/B 数值输入', true);
+  const q = new URLSearchParams({
+    name: f.name, green: $('green').checked ? '1' : '0',
+    color, similarity: $('similarity').value, blend: $('blend').value });
+  status('正在抽帧，请稍候…');
+  $('btnExtract').disabled = true;
+  try {
+    const r = await fetch('/api/extract?' + q, { method: 'POST', body: f });
+    const d = await r.json();
+    if (d.error) return status(d.error, true);
+    status(`完成，共 ${d.count} 帧`);
+    await loadFrames();
+    $('step2').classList.remove('hidden');
+  } catch (e) { status(String(e), true); }
+  finally { $('btnExtract').disabled = false; }
+};
+
+async function loadFrames() {
+  const d = await (await fetch('/api/frames')).json();
+  frames = d.frames; selected = new Set(frames);
+  renderGrid();
+}
+
+function renderGrid() {
+  $('grid').innerHTML = frames.map(n =>
+    `<div class="cell ${selected.has(n) ? 'sel' : ''}" data-n="${n}">
+       <img loading="lazy" src="/ws/frames/frame_${pad(n)}.png"><span class="num">${n}</span>
+     </div>`).join('');
+  document.querySelectorAll('.cell').forEach(c => c.onclick = () => {
+    const n = +c.dataset.n;
+    selected.has(n) ? selected.delete(n) : selected.add(n);
+    c.classList.toggle('sel'); updateSelInfo();
+  });
+  updateSelInfo();
+}
+const updateSelInfo = () => $('selInfo').textContent = `已选 ${selected.size} / ${frames.length} 帧`;
+$('btnAll').onclick = () => { selected = new Set(frames); renderGrid(); };
+$('btnNone').onclick = () => { selected.clear(); renderGrid(); };
+
+$('btnSheet').onclick = async () => {
+  $('sheetBox').innerHTML = '<span style="font-size:13px">生成中…</span>';
+  const d = await (await fetch('/api/sheet', { method: 'POST', body: '{}' })).json();
+  $('sheetBox').innerHTML = d.error ? `<span class="err">${d.error}</span>`
+    : `<img class="result" src="${d.url}?t=${Date.now()}">`;
+};
+
+$('btnDiff').onclick = async () => {
+  $('diffBox').innerHTML = '<span style="font-size:13px">分析中…</span>';
+  const d = await (await fetch('/api/diff')).json();
+  if (d.error) return $('diffBox').innerHTML = `<span class="err">${d.error}</span>`;
+  const fmt = arr => arr.length ? arr.map(p => p.join('-')).join(', ') : '无';
+  $('diffBox').innerHTML = `
+    <img class="result" src="${d.chart_url}?t=${Date.now()}">
+    <p class="pairs">平均差异 ${d.avg}，最大 ${d.max}<br>
+    接近静止（可删冗余）: ${fmt(d.still)}<br>
+    剧烈变化（建议保留）: ${fmt(d.peak)}</p>`;
+};
+
+$('btnPreview').onclick = async () => {
+  if (!selected.size) return alert('请先选择至少一帧');
+  $('gifBox').innerHTML = '<span style="font-size:13px">生成中…</span>';
+  const d = await (await fetch('/api/preview', { method: 'POST',
+    body: JSON.stringify({ frames: [...selected], fps: +$('fps').value }) })).json();
+  $('gifBox').innerHTML = d.error ? `<span class="err">${d.error}</span>`
+    : `<img class="result" src="${d.url}?t=${Date.now()}">`;
+};
+</script>
+</body>
+</html>

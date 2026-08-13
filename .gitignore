@@ -1,0 +1,15 @@
+# Python 虚拟环境
+.venv/
+venv/
+
+# 工具运行时产物
+output/
+workspace/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 系统文件
+.DS_Store
+Thumbs.db
