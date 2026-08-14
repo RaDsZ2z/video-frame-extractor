@@ -4,15 +4,20 @@
     .venv/Scripts/python src/server.py [--port 8765]
 
 启动后自动打开浏览器（默认 http://127.0.0.1:8765），在页面上完成:
-    上传视频 -> 抽帧(可选绿幕抠图) -> 总览图/差异分析 -> 点选帧 -> 预览 GIF
+    上传/选择视频 -> 抽帧(可选绿幕抠图) -> 总览图/差异分析 -> 点选帧 -> 预览 GIF
+
+与命令行共用同一套目录，网页版只是 extract_frames.py / frame_tools.py 的图形入口:
+    视频统一收纳进 input/（与 ingest_video.py 同一套命名规则），
+    帧与拼图/差异图/GIF 统一产出到 output/<视频名>/。
 """
 
 import json
 import os
+import shutil
 import sys
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -20,15 +25,35 @@ sys.path.insert(0, SCRIPT_DIR)
 
 import extract_frames
 import frame_tools
+import ingest_video
 
-WS = os.path.join(PROJECT_ROOT, "workspace")
-FRAMES_DIR = os.path.join(WS, "frames")
-OUT_DIR = os.path.join(WS, "output")
-os.makedirs(FRAMES_DIR, exist_ok=True)
-os.makedirs(OUT_DIR, exist_ok=True)
+INPUT_DIR = os.path.join(PROJECT_ROOT, "input")
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
+os.makedirs(INPUT_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 MIME = {".html": "text/html; charset=utf-8", ".png": "image/png",
         ".gif": "image/gif", ".mp4": "video/mp4"}
+
+
+def safe_name(name: str) -> str:
+    """项目名即 output/ 下的目录名，拒绝路径穿越。"""
+    if not name or name in (".", "..") or "/" in name or "\\" in name:
+        raise ValueError(f"非法名称: {name!r}")
+    return name
+
+
+def project_dir(name: str) -> str:
+    return os.path.join(OUTPUT_DIR, safe_name(name))
+
+
+def frames_dir(name: str) -> str:
+    return os.path.join(project_dir(name), "frames")
+
+
+def out_url(name: str, filename: str) -> str:
+    """output/<项目>/<文件> 对应的浏览 URL（名称可能含中文，需转义）。"""
+    return f"/out/{quote(name)}/{filename}"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -55,6 +80,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def serve_under(self, root, rel):
+        """静态服务 root 下的文件（rel 需反转义），禁止越出 root。"""
+        full = os.path.join(root, os.path.normpath(unquote(rel)))
+        if not os.path.abspath(full).startswith(os.path.abspath(root) + os.sep):
+            return self.send_error(403)
+        return self.send_file(full)
+
     def run_tool(self, fn):
         """调用 frame_tools/extract_frames 里的函数，把 sys.exit 转成错误响应。"""
         try:
@@ -70,34 +102,47 @@ class Handler(BaseHTTPRequestHandler):
     # ---------------- GET ----------------
     def do_GET(self):
         url = urlparse(self.path)
-        path = url.path
+        path, qs = url.path, parse_qs(url.query)
         if path == "/":
             return self.send_file(os.path.join(SCRIPT_DIR, "index.html"))
+        if path == "/api/list":
+            videos = sorted(f for f in os.listdir(INPUT_DIR)
+                            if f.lower().endswith(".mp4"))
+            projects = []
+            for d in sorted(os.listdir(OUTPUT_DIR)):
+                fd = os.path.join(OUTPUT_DIR, d, "frames")
+                if os.path.isdir(fd):
+                    n = len([f for f in os.listdir(fd) if f.endswith(".png")])
+                    projects.append({"name": d, "frames": n})
+            return self.send_json({"videos": videos, "projects": projects})
         if path == "/api/frames":
             try:
-                frames = frame_tools.list_frames(FRAMES_DIR)
-            except SystemExit:  # 帧目录为空时返回空列表，而不是断开连接
+                frames = frame_tools.list_frames(frames_dir(qs.get("name", [""])[0]))
+            except (SystemExit, ValueError, FileNotFoundError):  # 项目不存在或无帧时返回空列表
                 frames = []
             return self.send_json({"frames": [n for n, _ in frames]})
         if path == "/api/diff":
-            chart = os.path.join(OUT_DIR, "diff_chart.png")
+            try:
+                name = safe_name(qs.get("name", [""])[0])
+                chart = os.path.join(project_dir(name), "diff_chart.png")
+            except ValueError as e:
+                return self.send_json({"error": str(e)}, 400)
             holder = {}
 
             def work():
-                holder["info"] = frame_tools.analyze_diff(FRAMES_DIR, chart)
+                holder["info"] = frame_tools.analyze_diff(frames_dir(name), chart)
 
             if not self.run_tool(work):
                 return
             info = holder["info"]
-            info["chart_url"] = "/ws/output/diff_chart.png"
+            info["chart_url"] = out_url(name, "diff_chart.png")
             info.pop("chart", None)
+            info.pop("csv", None)
             return self.send_json(info)
-        if path.startswith("/ws/"):
-            rel = os.path.normpath(path[len("/ws/"):])
-            full = os.path.join(WS, rel)
-            if not os.path.abspath(full).startswith(os.path.abspath(WS)):
-                return self.send_error(403)
-            return self.send_file(full)
+        if path.startswith("/out/"):
+            return self.serve_under(OUTPUT_DIR, path[len("/out/"):])
+        if path.startswith("/in/"):
+            return self.serve_under(INPUT_DIR, path[len("/in/"):])
         return self.send_error(404)
 
     # ---------------- POST ----------------
@@ -111,42 +156,59 @@ class Handler(BaseHTTPRequestHandler):
             return self.api_extract(qs, body)
         if path == "/api/sheet":
             opts = json.loads(body or b"{}")
+            try:
+                name = safe_name(opts.get("name", ""))
+            except ValueError as e:
+                return self.send_json({"error": str(e)}, 400)
+            out = os.path.join(project_dir(name), "contact_sheet.png")
             return self.run_tool(lambda: frame_tools.cmd_sheet(
-                FRAMES_DIR, os.path.join(OUT_DIR, "contact_sheet.png"),
+                frames_dir(name), out,
                 int(opts.get("cols", 5)), int(opts.get("width", 240)))) \
-                and self.send_json({"url": "/ws/output/contact_sheet.png"})
+                and self.send_json({"url": out_url(name, "contact_sheet.png")})
         if path == "/api/preview":
             opts = json.loads(body or b"{}")
             nums = opts.get("frames")
             if not nums:
                 return self.send_json({"error": "请先选择至少一帧"}, 400)
+            try:
+                name = safe_name(opts.get("name", ""))
+            except ValueError as e:
+                return self.send_json({"error": str(e)}, 400)
             spec = ",".join(str(n) for n in sorted(nums))
             fps = int(opts.get("fps", 12))
+            out = os.path.join(project_dir(name), "preview.gif")
             return self.run_tool(lambda: frame_tools.cmd_preview(
-                FRAMES_DIR, spec, fps, os.path.join(OUT_DIR, "preview.gif"))) \
-                and self.send_json({"url": "/ws/output/preview.gif"})
+                frames_dir(name), spec, fps, out)) \
+                and self.send_json({"url": out_url(name, "preview.gif")})
         return self.send_error(404)
 
     def api_extract(self, qs, body):
-        if not body:
-            return self.send_json({"error": "没有收到视频数据"}, 400)
-        name = qs.get("name", ["video.mp4"])[0]
-        ext = os.path.splitext(name)[1] or ".mp4"
-        video = os.path.join(WS, "upload" + ext)
-        with open(video, "wb") as f:
-            f.write(body)
-        # 清空旧帧
-        for f in os.listdir(FRAMES_DIR):
-            os.remove(os.path.join(FRAMES_DIR, f))
         green = qs.get("green", ["0"])[0] == "1"
         color = qs.get("color", ["0x00FF00"])[0].replace("#", "0x")
         sim = qs.get("similarity", ["0.08"])[0]
         blend = qs.get("blend", ["0.02"])[0]
+
+        if body:  # 上传新视频：先收纳进 input/（与 ingest_video.py 同一套规则）
+            raw = qs.get("name", ["video.mp4"])[0]
+            if os.path.splitext(raw)[1].lower() != ".mp4":
+                return self.send_json({"error": "只支持 mp4 视频"}, 400)
+            video = ingest_video.unique_path(ingest_video.normalize(raw))
+            with open(video, "wb") as f:
+                f.write(body)
+        else:  # 不上传时直接抽 input/ 里已有的视频
+            src = qs.get("input", [""])[0]
+            video = os.path.join(INPUT_DIR, os.path.basename(src))
+            if not src or not os.path.isfile(video):
+                return self.send_json({"error": "没有收到视频数据"}, 400)
+
+        name = os.path.splitext(os.path.basename(video))[0]
+        out = frames_dir(name)
+        shutil.rmtree(out, ignore_errors=True)  # 重抽时清掉旧帧
         if not self.run_tool(lambda: extract_frames.extract(
-                video, FRAMES_DIR, green, color, sim, blend)):
+                video, out, green, color, sim, blend)):
             return
-        count = len([f for f in os.listdir(FRAMES_DIR) if f.endswith(".png")])
-        self.send_json({"count": count})
+        count = len([f for f in os.listdir(out) if f.endswith(".png")])
+        self.send_json({"count": count, "name": name})
 
 
 def main():

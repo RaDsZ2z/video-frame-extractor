@@ -11,8 +11,10 @@
          border-left: 4px solid #7ec8ff; padding-left: 8px; }
   .card { background: #2a2a2a; border-radius: 8px; padding: 16px; margin-top: 10px; }
   label { font-size: 13px; margin-right: 6px; }
-  input[type=number], input[type=text] { background: #1e1e1e; color: #ddd;
-         border: 1px solid #555; border-radius: 4px; padding: 4px 6px; width: 70px; }
+  input[type=number], input[type=text], select { background: #1e1e1e; color: #ddd;
+         border: 1px solid #555; border-radius: 4px; padding: 4px 6px; }
+  input[type=number], input[type=text] { width: 70px; }
+  select { max-width: 260px; }
   button { background: #3a7bd5; color: #fff; border: 0; border-radius: 5px;
            padding: 7px 16px; cursor: pointer; font-size: 14px; margin-right: 8px; }
   button:hover { background: #4a8ce5; } button:disabled { background: #555; cursor: default; }
@@ -38,11 +40,15 @@
 <body>
 <h1>序列帧提取工具（视频 → PNG → 挑帧 → 预览）</h1>
 
-<h2>1. 上传视频并抽帧</h2>
+<h2>1. 选择视频并抽帧</h2>
 <div class="card">
   <div class="row">
     <input type="file" id="file" accept="video/mp4,video/*">
     <label><input type="checkbox" id="green"> 绿幕抠图</label>
+  </div>
+  <div class="row">
+    <span style="font-size:13px;color:#bbb">或直接抽 input/ 里已有的视频（新上传的也会自动收纳进 input/）：</span>
+    <select id="videoList"><option value="">（选择已有视频）</option></select>
   </div>
   <div class="row" id="greenOpts" style="display:none">
     <label>幕布颜色
@@ -61,6 +67,12 @@
   </div>
   <div class="row">
     <button id="btnExtract">开始抽帧</button><span id="status"></span>
+  </div>
+  <div class="row">
+    <span style="font-size:13px;color:#bbb">打开 output/ 里已有的项目继续挑帧：</span>
+    <select id="projList"></select>
+    <button id="btnOpen" class="ghost">打开项目</button>
+    <span id="curName" style="font-size:13px;color:#7ec8ff"></span>
   </div>
 </div>
 
@@ -91,11 +103,25 @@
 
 <script>
 const $ = id => document.getElementById(id);
-let frames = [], selected = new Set();
+let frames = [], selected = new Set(), current = "";
 
 const pad = n => String(n).padStart(5, '0');
+const esc = s => s.replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const status = (msg, isErr) => { $('status').textContent = msg;
   $('status').className = isErr ? 'err' : ''; };
+const setCurrent = name => { current = name;
+  $('curName').textContent = name ? `当前项目：${name}（output/${name}/）` : ''; };
+
+// 拉取 input/ 视频列表和 output/ 项目列表，填充两个下拉框
+async function refreshLists() {
+  const d = await (await fetch('/api/list')).json();
+  $('videoList').innerHTML = '<option value="">（选择已有视频）</option>' +
+    d.videos.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  $('projList').innerHTML = '<option value="">（选择已有项目）</option>' +
+    d.projects.map(p => `<option value="${esc(p.name)}">${esc(p.name)}（${p.frames} 帧）</option>`).join('');
+}
+refreshLists();
 
 $('green').onchange = e => $('greenOpts').style.display = e.target.checked ? 'flex' : 'none';
 
@@ -139,7 +165,15 @@ $('cR').oninput = $('cG').oninput = $('cB').oninput = onRgb;
 $('file').onchange = e => {
   const f = e.target.files[0];
   if (!f) return;
+  $('videoList').value = '';      // 文件选择与下拉框互斥，以最后操作为准
   $('video').src = URL.createObjectURL(f);
+  $('videoRow').style.display = 'flex';
+};
+$('videoList').onchange = e => {  // 选了 input/ 已有视频：清掉文件选择，改从服务器加载预览
+  const v = e.target.value;
+  if (!v) return;
+  $('file').value = '';
+  $('video').src = '/in/' + encodeURIComponent(v);
   $('videoRow').style.display = 'flex';
 };
 $('video').onclick = e => {
@@ -163,36 +197,51 @@ $('video').onclick = e => {
 };
 
 $('btnExtract').onclick = async () => {
-  const f = $('file').files[0];
-  if (!f) return status('请先选择视频文件', true);
+  const f = $('file').files[0], exist = $('videoList').value;
+  if (!f && !exist) return status('请先选择视频文件', true);
   const color = hexColor();
   if (!color) return status('幕布颜色格式不正确：hex 需为 #FFFFFF 形式，或改用 R/G/B 数值输入', true);
   const q = new URLSearchParams({
-    name: f.name, green: $('green').checked ? '1' : '0',
+    green: $('green').checked ? '1' : '0',
     color, similarity: $('similarity').value, blend: $('blend').value });
+  let body = null;
+  if (f) { q.set('name', f.name); body = f; }   // 上传新视频
+  else q.set('input', exist);                   // 抽 input/ 里已有的视频
   status('正在抽帧，请稍候…');
   $('btnExtract').disabled = true;
   try {
-    const r = await fetch('/api/extract?' + q, { method: 'POST', body: f });
+    const r = await fetch('/api/extract?' + q, { method: 'POST', body });
     const d = await r.json();
     if (d.error) return status(d.error, true);
-    status(`完成，共 ${d.count} 帧`);
+    setCurrent(d.name);
+    status(`完成，共 ${d.count} 帧，保存在 output/${d.name}/frames/`);
     await loadFrames();
+    refreshLists();
     $('step2').classList.remove('hidden');
   } catch (e) { status(String(e), true); }
   finally { $('btnExtract').disabled = false; }
 };
 
+$('btnOpen').onclick = async () => {  // 打开 output/ 里已有的项目继续挑帧
+  const name = $('projList').value;
+  if (!name) return status('请先选择要打开的项目', true);
+  setCurrent(name);
+  status('');
+  await loadFrames();
+  if (frames.length) $('step2').classList.remove('hidden');
+};
+
 async function loadFrames() {
-  const d = await (await fetch('/api/frames')).json();
+  const d = await (await fetch('/api/frames?name=' + encodeURIComponent(current))).json();
   frames = d.frames; selected = new Set(frames);
+  if (!frames.length) status(`output/${current}/frames/ 里没有帧，请先抽帧`, true);
   renderGrid();
 }
 
 function renderGrid() {
   $('grid').innerHTML = frames.map(n =>
     `<div class="cell ${selected.has(n) ? 'sel' : ''}" data-n="${n}">
-       <img loading="lazy" src="/ws/frames/frame_${pad(n)}.png"><span class="num">${n}</span>
+       <img loading="lazy" src="/out/${encodeURIComponent(current)}/frames/frame_${pad(n)}.png"><span class="num">${n}</span>
      </div>`).join('');
   document.querySelectorAll('.cell').forEach(c => c.onclick = () => {
     const n = +c.dataset.n;
@@ -207,14 +256,15 @@ $('btnNone').onclick = () => { selected.clear(); renderGrid(); };
 
 $('btnSheet').onclick = async () => {
   $('sheetBox').innerHTML = '<span style="font-size:13px">生成中…</span>';
-  const d = await (await fetch('/api/sheet', { method: 'POST', body: '{}' })).json();
+  const d = await (await fetch('/api/sheet', { method: 'POST',
+    body: JSON.stringify({ name: current }) })).json();
   $('sheetBox').innerHTML = d.error ? `<span class="err">${d.error}</span>`
     : `<img class="result" src="${d.url}?t=${Date.now()}">`;
 };
 
 $('btnDiff').onclick = async () => {
   $('diffBox').innerHTML = '<span style="font-size:13px">分析中…</span>';
-  const d = await (await fetch('/api/diff')).json();
+  const d = await (await fetch('/api/diff?name=' + encodeURIComponent(current))).json();
   if (d.error) return $('diffBox').innerHTML = `<span class="err">${d.error}</span>`;
   const fmt = arr => arr.length ? arr.map(p => p.join('-')).join(', ') : '无';
   $('diffBox').innerHTML = `
@@ -228,7 +278,7 @@ $('btnPreview').onclick = async () => {
   if (!selected.size) return alert('请先选择至少一帧');
   $('gifBox').innerHTML = '<span style="font-size:13px">生成中…</span>';
   const d = await (await fetch('/api/preview', { method: 'POST',
-    body: JSON.stringify({ frames: [...selected], fps: +$('fps').value }) })).json();
+    body: JSON.stringify({ name: current, frames: [...selected], fps: +$('fps').value }) })).json();
   $('gifBox').innerHTML = d.error ? `<span class="err">${d.error}</span>`
     : `<img class="result" src="${d.url}?t=${Date.now()}">`;
 };

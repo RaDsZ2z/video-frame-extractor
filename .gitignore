@@ -4,7 +4,6 @@ venv/
 
 # 工具运行时产物
 output/
-workspace/
 input/
 
 # Python 缓存
