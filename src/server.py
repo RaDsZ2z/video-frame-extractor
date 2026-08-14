@@ -7,12 +7,13 @@
     上传/选择视频 -> 抽帧(可选绿幕抠图) -> 总览图/差异分析 -> 点选帧 -> 预览 GIF
 
 与命令行共用同一套目录，网页版只是 extract_frames.py / frame_tools.py 的图形入口:
-    视频统一收纳进 input/（与 ingest_video.py 同一套命名规则），
+    视频统一放 input/（网页上传会自动收纳进去，重名自动加序号），
     帧与拼图/差异图/GIF 统一产出到 output/<视频名>/。
 """
 
 import json
 import os
+import re
 import shutil
 import sys
 import webbrowser
@@ -25,7 +26,6 @@ sys.path.insert(0, SCRIPT_DIR)
 
 import extract_frames
 import frame_tools
-import ingest_video
 
 INPUT_DIR = os.path.join(PROJECT_ROOT, "input")
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
@@ -34,6 +34,22 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 MIME = {".html": "text/html; charset=utf-8", ".png": "image/png",
         ".gif": "image/gif", ".mp4": "video/mp4"}
+
+
+def normalize(name: str) -> str:
+    """文件名安全化：保留中英文/数字/_-，其余字符替换为 _。"""
+    safe = re.sub(r"[^\w\u4e00-\u9fff-]+", "_", os.path.splitext(name)[0]).strip("_")
+    return safe or "video"
+
+
+def unique_path(name: str) -> str:
+    """input/ 下不重名：已存在则追加 _2、_3……"""
+    target = os.path.join(INPUT_DIR, name + ".mp4")
+    n = 2
+    while os.path.exists(target):
+        target = os.path.join(INPUT_DIR, f"{name}_{n}.mp4")
+        n += 1
+    return target
 
 
 def safe_name(name: str) -> str:
@@ -154,8 +170,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/extract":
             return self.api_extract(qs, body)
+        if path == "/api/sheet" or path == "/api/preview":
+            try:
+                opts = json.loads(body or b"{}")
+            except ValueError:  # 非法 JSON 或非 UTF-8 编码（JSONDecodeError/UnicodeDecodeError 都是 ValueError）
+                return self.send_json({"error": "请求体不是合法的 UTF-8 JSON"}, 400)
         if path == "/api/sheet":
-            opts = json.loads(body or b"{}")
             try:
                 name = safe_name(opts.get("name", ""))
             except ValueError as e:
@@ -166,7 +186,6 @@ class Handler(BaseHTTPRequestHandler):
                 int(opts.get("cols", 5)), int(opts.get("width", 240)))) \
                 and self.send_json({"url": out_url(name, "contact_sheet.png")})
         if path == "/api/preview":
-            opts = json.loads(body or b"{}")
             nums = opts.get("frames")
             if not nums:
                 return self.send_json({"error": "请先选择至少一帧"}, 400)
@@ -188,11 +207,11 @@ class Handler(BaseHTTPRequestHandler):
         sim = qs.get("similarity", ["0.08"])[0]
         blend = qs.get("blend", ["0.02"])[0]
 
-        if body:  # 上传新视频：先收纳进 input/（与 ingest_video.py 同一套规则）
+        if body:  # 上传新视频：先收纳进 input/（安全化命名 + 重名加序号）
             raw = qs.get("name", ["video.mp4"])[0]
             if os.path.splitext(raw)[1].lower() != ".mp4":
                 return self.send_json({"error": "只支持 mp4 视频"}, 400)
-            video = ingest_video.unique_path(ingest_video.normalize(raw))
+            video = unique_path(normalize(raw))
             with open(video, "wb") as f:
                 f.write(body)
         else:  # 不上传时直接抽 input/ 里已有的视频
