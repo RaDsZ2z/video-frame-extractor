@@ -1,0 +1,4 @@
+imageio-ffmpeg
+pillow
+numpy
+scipy

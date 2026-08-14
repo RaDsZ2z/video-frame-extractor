@@ -4,12 +4,12 @@
 
 ## 环境准备
 
-只需要 Python（3.10+）和两份依赖，ffmpeg 由 `imageio-ffmpeg` 包内置提供，无需单独安装：
+只需要 Python（3.10+），依赖清单见 `requirements.txt`（imageio-ffmpeg / pillow / numpy / scipy），ffmpeg 由 `imageio-ffmpeg` 包内置提供，无需单独安装：
 
 ```bash
 python -m venv .venv
-.venv/Scripts/pip install imageio-ffmpeg pillow numpy scipy      # Windows
-# .venv/bin/pip install imageio-ffmpeg pillow numpy scipy        # macOS/Linux
+.venv/Scripts/pip install -r requirements.txt      # Windows
+# .venv/bin/pip install -r requirements.txt        # macOS/Linux
 ```
 
 下文命令均用 Windows 写法 `.venv/Scripts/python`，macOS/Linux 换成 `.venv/bin/python`。
@@ -95,6 +95,7 @@ Windows 下也可以直接双击 `启动网页版.bat`。
 | `frame_tools.py` | 挑帧辅助 CLI（总览拼图 / 差异分析 / 预览 GIF） |
 | `server.py` / `index.html` | 本地网页界面，整合以上全部功能 |
 | `启动网页版.bat` | Windows 双击启动网页版 |
+| `requirements.txt` | Python 依赖清单，`pip install -r requirements.txt` 一键安装 |
 | `output/` | 所有产出，按视频名分目录（frames/ + 拼图 + 差异图 + CSV + 预览 GIF） |
 | `workspace/` | 网页版运行时的中间产物目录，可随时删除 |
 
