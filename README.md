@@ -24,10 +24,10 @@ python -m venv .venv
 2. 上传参考图（绿幕角色图），填入提示词（用下面的模板）
 3. 参数建议：时长按一个完整动作循环取（走路常用 5 秒）；画面比例按最终用途（角色动画常见 16:9 或 1:1）；画质选最高；具体选项以网页实际为准
 4. 生成后**先在视频层面验收**（见下方清单），不满意就换提示词/参数重生成，**不必抽帧**
-5. 满意后下载 mp4，用 `ingest_video.py` 收纳进项目：
+5. 满意后下载 mp4，用 `src\ingest_video.py` 收纳进项目：
 
 ```bash
-.venv/Scripts/python ingest_video.py 下载的.mp4 --name 走路循环 --open
+.venv/Scripts/python src\ingest_video.py 下载的.mp4 --name 走路循环 --open
 ```
 
 - 不写 `--name` 就用源文件名；`--move` 表示移动而非复制；`--open` 收纳后自动打开视频预览；`--list` 查看已收纳视频
@@ -58,7 +58,7 @@ python -m venv .venv
 ## 方式一：网页界面（推荐）
 
 ```bash
-.venv/Scripts/python server.py
+.venv/Scripts/python src\server.py
 ```
 
 Windows 下也可以直接双击 `启动网页版.bat`。
@@ -75,20 +75,20 @@ Windows 下也可以直接双击 `启动网页版.bat`。
 
 ## 方式二：命令行
 
-### 1. 抽帧 `extract_frames.py`
+### 1. 抽帧 `src\extract_frames.py`
 
 ```bash
 # 普通视频
-.venv/Scripts/python extract_frames.py 视频.mp4
+.venv/Scripts/python src\extract_frames.py 视频.mp4
 
 # 绿幕视频（背景转透明 PNG）
-.venv/Scripts/python extract_frames.py 视频.mp4 --green
+.venv/Scripts/python src\extract_frames.py 视频.mp4 --green
 
 # 白幕/灰幕视频（自动改用 colorkey，无需额外参数）
-.venv/Scripts/python extract_frames.py 视频.mp4 --green --color 0xFFFFFF
+.venv/Scripts/python src\extract_frames.py 视频.mp4 --green --color 0xFFFFFF
 
 # 抠图效果不理想时调参数
-.venv/Scripts/python extract_frames.py 视频.mp4 --green --color 0x65AC64 --similarity 0.05 --blend 0.02
+.venv/Scripts/python src\extract_frames.py 视频.mp4 --green --color 0x65AC64 --similarity 0.05 --blend 0.02
 ```
 
 - 默认输出到 `output/<视频名>/frames/`（也可在视频名后加第二个参数自定义目录），
@@ -103,17 +103,17 @@ Windows 下也可以直接双击 `启动网页版.bat`。
 - 抠图后默认做"孔洞填补"：不与图像边缘连通的透明区域恢复不透明，保护
   主体上的亮色部位（如白色眼睛、高光）不被误抠成洞；不需要可加 `--no-fill`
 
-### 2. 挑帧辅助 `frame_tools.py`
+### 2. 挑帧辅助 `src\frame_tools.py`
 
 ```bash
 # 总览拼图：所有帧拼成带编号的大图
-.venv/Scripts/python frame_tools.py sheet output/视频名/frames --cols 5 --width 240
+.venv/Scripts/python src\frame_tools.py sheet output/视频名/frames --cols 5 --width 240
 
 # 帧差异分析：找出静止区段（可删冗余）和剧烈动作位置（建议保留），末列为循环接缝
-.venv/Scripts/python frame_tools.py diff output/视频名/frames
+.venv/Scripts/python src\frame_tools.py diff output/视频名/frames
 
 # 选中帧预览 GIF
-.venv/Scripts/python frame_tools.py preview output/视频名/frames "1-10,15,20-30:2" --fps 12
+.venv/Scripts/python src\frame_tools.py preview output/视频名/frames "1-10,15,20-30:2" --fps 12
 ```
 
 - 三个子命令的产物（contact_sheet.png / diff_chart.png / frame_diffs.csv /
@@ -132,10 +132,11 @@ Windows 下也可以直接双击 `启动网页版.bat`。
 
 | 文件 | 作用 |
 |---|---|
-| `ingest_video.py` | 流水线第一步：收纳网页下载的生成视频进 `input/`，统一命名并提示下一步 |
-| `extract_frames.py` | 抽帧 CLI（ffmpeg 抽帧 + chromakey/colorkey 抠图 + 孔洞填补） |
-| `frame_tools.py` | 挑帧辅助 CLI（总览拼图 / 差异分析 / 预览 GIF） |
-| `server.py` / `index.html` | 本地网页界面，整合以上全部功能 |
+| `src/` | 全部脚本与网页界面（代码目录，不散落在根目录） |
+| `src/ingest_video.py` | 流水线第一步：收纳网页下载的生成视频进 `input/`，统一命名并提示下一步 |
+| `src/extract_frames.py` | 抽帧 CLI（ffmpeg 抽帧 + chromakey/colorkey 抠图 + 孔洞填补） |
+| `src/frame_tools.py` | 挑帧辅助 CLI（总览拼图 / 差异分析 / 预览 GIF） |
+| `src/server.py` / `src/index.html` | 本地网页界面，整合以上全部功能 |
 | `启动网页版.bat` | Windows 双击启动网页版 |
 | `requirements.txt` | Python 依赖清单，`pip install -r requirements.txt` 一键安装 |
 | `input/` | 待处理的源视频目录（生成的视频收纳在这里，不入库 git） |

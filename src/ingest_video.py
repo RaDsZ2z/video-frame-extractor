@@ -5,10 +5,10 @@
 input/，之后再用 extract_frames.py 抽帧。详见 README「第一步」一节。
 
 用法:
-    .venv/Scripts/python ingest_video.py 视频.mp4                    # 复制进 input/
-    .venv/Scripts/python ingest_video.py 视频.mp4 --name 走路循环      # 自定义名称
-    .venv/Scripts/python ingest_video.py 视频.mp4 --move --open        # 移动并打开预览
-    .venv/Scripts/python ingest_video.py --list                       # 列出已收纳视频
+    .venv/Scripts/python src/ingest_video.py 视频.mp4                    # 复制进 input/
+    .venv/Scripts/python src/ingest_video.py 视频.mp4 --name 走路循环      # 自定义名称
+    .venv/Scripts/python src/ingest_video.py 视频.mp4 --move --open        # 移动并打开预览
+    .venv/Scripts/python src/ingest_video.py --list                       # 列出已收纳视频
 
 选项:
     --name 名称   收纳后的文件名（默认取源文件名，特殊字符替换为 _）
@@ -22,7 +22,7 @@ import re
 import shutil
 import sys
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录
 INPUT_DIR = os.path.join(ROOT, "input")
 PY = os.path.join(ROOT, ".venv", "Scripts", "python.exe") if os.name == "nt" \
     else os.path.join(ROOT, ".venv", "bin", "python")
@@ -76,7 +76,7 @@ def ingest(video: str, name: str = "", move: bool = False,
     print(f"  -> {os.path.abspath(target)}  ({size:.1f} MB)")
 
     print("\n先看视频再抽帧（动作/循环接缝/主体/绿幕），满意后执行：")
-    print(f'  {PY} extract_frames.py "{os.path.relpath(target, ROOT)}" --green')
+    print(f'  {PY} src\\extract_frames.py "{os.path.relpath(target, ROOT)}" --green')
     print("效果差就回生成平台换提示词/参数重生成，不必抽帧。")
     if open_after:
         open_video(target)
@@ -86,7 +86,7 @@ def ingest(video: str, name: str = "", move: bool = False,
 def list_inputs() -> None:
     if not os.path.isdir(INPUT_DIR) or not any(
             f.lower().endswith(".mp4") for f in os.listdir(INPUT_DIR)):
-        print("input/ 下还没有视频。用法: .venv/Scripts/python ingest_video.py 视频.mp4")
+        print("input/ 下还没有视频。用法: .venv/Scripts/python src\\ingest_video.py 视频.mp4")
         return
     print(f"input/ 下已收纳的视频（{os.path.abspath(INPUT_DIR)}）:")
     for f in sorted(os.listdir(INPUT_DIR)):

@@ -1,9 +1,9 @@
 """把 mp4 视频的全部帧导出为 PNG 序列，可选背景抠图（背景转透明）。
 
 用法:
-    .venv/Scripts/python extract_frames.py 视频.mp4 [输出目录] [选项]
+    .venv/Scripts/python src/extract_frames.py 视频.mp4 [输出目录] [选项]
 
-    输出目录省略时默认为 output/<视频名>/frames
+    输出目录省略时默认为项目根目录下的 output/<视频名>/frames
 
 选项:
     --green            启用背景抠图（对绿幕/白幕等纯色背景均有效）
@@ -19,9 +19,9 @@
     避免主体上的亮色部位（如白色眼睛）被误抠成洞。
 
 示例:
-    .venv/Scripts/python extract_frames.py run.mp4                 # 普通视频
-    .venv/Scripts/python extract_frames.py run.mp4 frames --green  # 绿幕视频
-    .venv/Scripts/python extract_frames.py run.mp4 frames --green --color 0xFFFFFF  # 白幕视频
+    .venv/Scripts/python src/extract_frames.py run.mp4                 # 普通视频
+    .venv/Scripts/python src/extract_frames.py run.mp4 frames --green  # 绿幕视频
+    .venv/Scripts/python src/extract_frames.py run.mp4 frames --green --color 0xFFFFFF  # 白幕视频
 """
 
 import os
@@ -29,6 +29,8 @@ import subprocess
 import sys
 
 import imageio_ffmpeg
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def is_neutral(color: str) -> bool:
@@ -107,7 +109,7 @@ def main(argv):
         sys.exit(__doc__)
     video = args[0]
     out = args[1] if len(args) > 1 else os.path.join(
-        "output", os.path.splitext(os.path.basename(video))[0], "frames")
+        PROJECT_ROOT, "output", os.path.splitext(os.path.basename(video))[0], "frames")
     extract(video, out,
             green="--green" in argv,
             color=opt("--color", "0x00FF00"),

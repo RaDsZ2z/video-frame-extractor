@@ -1,7 +1,7 @@
 """帧提取与挑帧工具的本地网页界面。
 
 用法:
-    .venv/Scripts/python server.py [--port 8765]
+    .venv/Scripts/python src/server.py [--port 8765]
 
 启动后自动打开浏览器（默认 http://127.0.0.1:8765），在页面上完成:
     上传视频 -> 抽帧(可选绿幕抠图) -> 总览图/差异分析 -> 点选帧 -> 预览 GIF
@@ -14,13 +14,14 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, ROOT)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+sys.path.insert(0, SCRIPT_DIR)
 
 import extract_frames
 import frame_tools
 
-WS = os.path.join(ROOT, "workspace")
+WS = os.path.join(PROJECT_ROOT, "workspace")
 FRAMES_DIR = os.path.join(WS, "frames")
 OUT_DIR = os.path.join(WS, "output")
 os.makedirs(FRAMES_DIR, exist_ok=True)
@@ -71,9 +72,12 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         path = url.path
         if path == "/":
-            return self.send_file(os.path.join(ROOT, "index.html"))
+            return self.send_file(os.path.join(SCRIPT_DIR, "index.html"))
         if path == "/api/frames":
-            frames = frame_tools.list_frames(FRAMES_DIR)
+            try:
+                frames = frame_tools.list_frames(FRAMES_DIR)
+            except SystemExit:  # 帧目录为空时返回空列表，而不是断开连接
+                frames = []
             return self.send_json({"frames": [n for n, _ in frames]})
         if path == "/api/diff":
             chart = os.path.join(OUT_DIR, "diff_chart.png")

@@ -6,9 +6,9 @@
     preview  把挑好的帧合成预览 GIF
 
 用法:
-    .venv/Scripts/python frame_tools.py sheet  帧目录 [-o 输出.png] [--cols 5] [--width 240]
-    .venv/Scripts/python frame_tools.py diff   帧目录 [--chart 差异图.png]
-    .venv/Scripts/python frame_tools.py preview 帧目录 "1-10,15,20-30:2" [--fps 12] [-o preview.gif]
+    .venv/Scripts/python src/frame_tools.py sheet  帧目录 [-o 输出.png] [--cols 5] [--width 240]
+    .venv/Scripts/python src/frame_tools.py diff   帧目录 [--chart 差异图.png]
+    .venv/Scripts/python src/frame_tools.py preview 帧目录 "1-10,15,20-30:2" [--fps 12] [-o preview.gif]
 
     输出文件省略 -o/--chart 时，默认写到帧目录的上一级
     （如帧目录是 output/视频名/frames，产物就落在 output/视频名/ 下）
@@ -46,7 +46,7 @@ def list_frames(frames_dir):
         if m:
             items.append((int(m.group(1)), os.path.join(frames_dir, f)))
     if not items:
-        sys.exit(f"{frames_dir} 里没有 frame_*.png，先运行 extract_frames.py")
+        sys.exit(f"{frames_dir} 里没有 frame_*.png，先运行 src\\extract_frames.py")
     return sorted(items)
 
 
@@ -131,7 +131,8 @@ def analyze_diff(frames_dir, chart):
 
         y0 = title_h + plot_h        # 柱子的底线
         for i, (a, _, d) in enumerate(diffs):
-            bar_h = int(d / mx * (plot_h - 10)) if mx else 0
+            # 柱子至少 1px，避免全静态帧(mx=0)时画 0 高矩形报错
+            bar_h = max(int(d / mx * (plot_h - 10)) if mx else 0, 1)
             color = (80, 200, 80) if d < still_th else ((255, 200, 60) if d <= peak_th else (255, 80, 80))
             dr.rectangle([i * col + 1, y0 - bar_h, i * col + col - 2, y0 - 1], fill=color)
             for j, ch in enumerate(str(a)):   # 编号竖排，如 32 -> 3 在上 2 在下
