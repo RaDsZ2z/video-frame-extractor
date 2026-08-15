@@ -82,12 +82,14 @@
   <div class="row">
     <button id="btnSheet" class="ghost">生成总览拼图</button>
     <button id="btnDiff" class="ghost">帧差异分析</button>
+    <button id="btnLoop" class="ghost">自动找循环</button>
     <button id="btnAll" class="ghost">全选</button>
     <button id="btnNone" class="ghost">清空选择</button>
     <span id="selInfo" style="font-size:13px;color:#ffe14d"></span>
   </div>
   <div id="sheetBox"></div>
   <div id="diffBox"></div>
+  <div id="loopBox"></div>
   <div id="grid"></div>
 </div>
 
@@ -110,6 +112,17 @@ const esc = s => s.replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const status = (msg, isErr) => { $('status').textContent = msg;
   $('status').className = isErr ? 'err' : ''; };
+
+// 统一的接口调用：网络异常、或响应不是 JSON（如旧版本服务返回的 404 页面），
+// 都转成可读错误，避免异步异常被吞掉、界面停在"分析中…"
+async function callJSON(url, opts) {
+  let r;
+  try { r = await fetch(url, opts); }
+  catch (e) { return { error: `请求失败：${e.message || e}。请确认服务终端窗口还在运行` }; }
+  const text = await r.text();
+  try { return JSON.parse(text); }
+  catch { return { error: `服务返回了无法识别的响应（HTTP ${r.status}）。若终端里跑的是旧版本服务，请把所有服务终端窗口关掉后重新启动网页版` }; }
+}
 const setCurrent = name => { current = name;
   $('curName').textContent = name ? `当前项目：${name}（output/${name}/）` : ''; };
 
@@ -210,16 +223,14 @@ $('btnExtract').onclick = async () => {
   status('正在抽帧，请稍候…');
   $('btnExtract').disabled = true;
   try {
-    const r = await fetch('/api/extract?' + q, { method: 'POST', body });
-    const d = await r.json();
+    const d = await callJSON('/api/extract?' + q, { method: 'POST', body });
     if (d.error) return status(d.error, true);
     setCurrent(d.name);
     status(`完成，共 ${d.count} 帧，保存在 output/${d.name}/frames/`);
     await loadFrames();
     refreshLists();
     $('step2').classList.remove('hidden');
-  } catch (e) { status(String(e), true); }
-  finally { $('btnExtract').disabled = false; }
+  } finally { $('btnExtract').disabled = false; }
 };
 
 $('btnOpen').onclick = async () => {  // 打开 output/ 里已有的项目继续挑帧
@@ -256,15 +267,15 @@ $('btnNone').onclick = () => { selected.clear(); renderGrid(); };
 
 $('btnSheet').onclick = async () => {
   $('sheetBox').innerHTML = '<span style="font-size:13px">生成中…</span>';
-  const d = await (await fetch('/api/sheet', { method: 'POST',
-    body: JSON.stringify({ name: current }) })).json();
+  const d = await callJSON('/api/sheet', { method: 'POST',
+    body: JSON.stringify({ name: current }) });
   $('sheetBox').innerHTML = d.error ? `<span class="err">${d.error}</span>`
     : `<img class="result" src="${d.url}?t=${Date.now()}">`;
 };
 
 $('btnDiff').onclick = async () => {
   $('diffBox').innerHTML = '<span style="font-size:13px">分析中…</span>';
-  const d = await (await fetch('/api/diff?name=' + encodeURIComponent(current))).json();
+  const d = await callJSON('/api/diff?name=' + encodeURIComponent(current));
   if (d.error) return $('diffBox').innerHTML = `<span class="err">${d.error}</span>`;
   const fmt = arr => arr.length ? arr.map(p => p.join('-')).join(', ') : '无';
   $('diffBox').innerHTML = `
@@ -274,11 +285,45 @@ $('btnDiff').onclick = async () => {
     剧烈变化（建议保留）: ${fmt(d.peak)}</p>`;
 };
 
+$('btnLoop').onclick = async () => {
+  $('loopBox').innerHTML = '<span style="font-size:13px">分析中…</span>';
+  const d = await callJSON('/api/loop', { method: 'POST',
+    body: JSON.stringify({ name: current, fps: +$('fps').value }) });
+  if (d.error) return $('loopBox').innerHTML = `<span class="err">${d.error}</span>`;
+  let html = '<p class="pairs">';
+  if (d.warning) html += `<span class="err">${d.warning}</span><br>`;
+  html += `最佳循环：第 ${d.start_num}-${d.end_num} 帧，共 ${d.period} 帧，接缝差异 ${d.seam}（${d.grade}）<br>
+    周期候选：${d.ranking.map(r => `T=${r[0]} ${r[1].toFixed(2)}`).join('　')}`;
+  if (d.dup_msg) html += `<br>${d.dup_msg}`;
+  const list = (label, arr) => arr && arr.length ?
+    `<br>　${label}（${arr.length} 个）: ${arr.join(',')}` : '';
+  html += list('确认混合帧', d.blend_frames);
+  html += list('疑似混合帧，建议人工确认', d.suspect_frames);
+  html += list('规律位置但模式中断', d.missing_frames);
+  html += list('近乎完全重复的帧', d.dup_frames);
+  if (d.clean_spec) html += `<br>　循环内剔除确认混合帧后（${d.clean_frames.length} 帧）: ${d.clean_spec}`;
+  html += `</p>
+    <img class="result" src="${d.strip_url}?t=${Date.now()}"><br>
+    <img class="result" src="${d.gif_url}?t=${Date.now()}" style="max-width:320px">
+    <div class="row"><button id="btnSelLoop" class="ghost">选中这些循环帧（可在下方微调）</button>` +
+    (d.clean_spec ? `<button id="btnSelClean" class="ghost">剔除混合帧后选中（${d.clean_frames.length} 帧）</button>` : '') +
+    `</div>`;
+  $('loopBox').innerHTML = html;
+  const selectNums = nums => {
+    selected = new Set(frames.filter(n => nums.includes(n)));
+    renderGrid();
+    $('grid').scrollIntoView({ behavior: 'smooth' });
+  };
+  $('btnSelLoop').onclick = () =>
+    selectNums(frames.filter(n => n >= d.start_num && n <= d.end_num));
+  if (d.clean_spec) $('btnSelClean').onclick = () => selectNums(d.clean_frames);
+};
+
 $('btnPreview').onclick = async () => {
   if (!selected.size) return alert('请先选择至少一帧');
   $('gifBox').innerHTML = '<span style="font-size:13px">生成中…</span>';
-  const d = await (await fetch('/api/preview', { method: 'POST',
-    body: JSON.stringify({ name: current, frames: [...selected], fps: +$('fps').value }) })).json();
+  const d = await callJSON('/api/preview', { method: 'POST',
+    body: JSON.stringify({ name: current, frames: [...selected], fps: +$('fps').value }) });
   $('gifBox').innerHTML = d.error ? `<span class="err">${d.error}</span>`
     : `<img class="result" src="${d.url}?t=${Date.now()}">`;
 };

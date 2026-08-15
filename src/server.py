@@ -170,7 +170,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/extract":
             return self.api_extract(qs, body)
-        if path == "/api/sheet" or path == "/api/preview":
+        if path == "/api/sheet" or path == "/api/preview" or path == "/api/loop":
             try:
                 opts = json.loads(body or b"{}")
             except ValueError:  # 非法 JSON 或非 UTF-8 编码（JSONDecodeError/UnicodeDecodeError 都是 ValueError）
@@ -199,6 +199,29 @@ class Handler(BaseHTTPRequestHandler):
             return self.run_tool(lambda: frame_tools.cmd_preview(
                 frames_dir(name), spec, fps, out)) \
                 and self.send_json({"url": out_url(name, "preview.gif")})
+        if path == "/api/loop":
+            try:
+                name = safe_name(opts.get("name", ""))
+            except ValueError as e:
+                return self.send_json({"error": str(e)}, 400)
+            strip = os.path.join(project_dir(name), "loop_strip.png")
+            gif = os.path.join(project_dir(name), "loop_preview.gif")
+            holder = {}
+
+            def work():
+                holder["info"] = frame_tools.analyze_loop(
+                    frames_dir(name),
+                    int(opts.get("min", 4)), int(opts.get("max", 60)),
+                    int(opts.get("fps", 18)), strip, gif)
+
+            if not self.run_tool(work):
+                return
+            info = holder["info"]
+            info.pop("strip", None)
+            info.pop("gif", None)
+            info["strip_url"] = out_url(name, "loop_strip.png")
+            info["gif_url"] = out_url(name, "loop_preview.gif")
+            return self.send_json(info)
         return self.send_error(404)
 
     def api_extract(self, qs, body):
@@ -230,12 +253,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"count": count, "name": name})
 
 
+class SingletonHTTPServer(ThreadingHTTPServer):
+    """关掉地址重用：让端口充当单实例锁，第二个实例 bind 时直接失败。
+
+    （默认 allow_reuse_address=1 在 Windows 下允许多个进程同时监听同一端口，
+    请求会被随机分给其中任意一个，新旧代码并存时接口行为不稳定。）
+    """
+    allow_reuse_address = False
+
+
 def main():
     port = 8765
     if "--port" in sys.argv:
         port = int(sys.argv[sys.argv.index("--port") + 1])
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}"
+    try:
+        server = SingletonHTTPServer(("127.0.0.1", port), Handler)
+    except OSError:
+        print(f"端口 {port} 已被占用：已有实例在运行，本次不再重复启动，直接打开浏览器。")
+        print("想换用最新代码的话，先关闭旧的服务终端窗口再启动；")
+        print("刚关闭时端口可能几十秒内未释放，提示占用就稍等再试。")
+        webbrowser.open(url)
+        return
     print(f"服务已启动: {url}  (Ctrl+C 停止)")
     webbrowser.open(url)
     try:

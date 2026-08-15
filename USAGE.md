@@ -89,6 +89,7 @@
 | `output/<视频名>/contact_sheet.png` | 总览拼图 |
 | `output/<视频名>/diff_chart.png`、`frame_diffs.csv` | 帧差异分析产物 |
 | `output/<视频名>/preview.gif` | 选中帧预览 |
+| `output/<视频名>/loop_strip.png`、`loop_preview.gif` | 自动找循环的产物（姿势拼接图、循环预览） |
 
 - 项目名 = 视频文件名去掉扩展名；网页上传会把文件名安全化（保留中英文/数字/`-`/`_`，其余转 `_`），重名自动追加 `_2`、`_3`
 - 网页版重抽会先清空该项目 `frames/` 下的旧帧；命令行重抽不主动清空（新视频帧数变少时会残留旧帧，建议先删掉 `frames/` 目录再抽）
@@ -115,12 +116,14 @@
 .venv/Scripts/python src\frame_tools.py sheet   <frames目录> [--cols 5] [--width 240] [-o 输出.png]
 .venv/Scripts/python src\frame_tools.py diff    <frames目录> [--chart 输出.png]
 .venv/Scripts/python src\frame_tools.py preview <frames目录> <帧号范围> [--fps 12] [-o 输出.gif]
+.venv/Scripts/python src\frame_tools.py loop    <frames目录> [--min 4] [--max 60] [--fps 18] [--strip 输出.png] [--gif 输出.gif]
 ```
 
 - `sheet`：所有帧拼成带编号的总览大图
 - `diff`：帧差异分析，找出静止区段（可删冗余）和剧烈动作位置（建议保留），末列为循环接缝
 - `preview`：把选中帧合成预览 GIF
-- 三个子命令的产物默认写到帧目录的上一级（即 `output/<视频名>/`）
+- `loop`：自动寻找最佳循环段——枚举周期 T 比较"帧i vs 帧i+T"差异定动作周期，再取接缝差异最小的起点；输出接缝评分、周期候选、姿势拼接图和循环预览 GIF；检测到帧率转换造成的规律插入帧时逐帧定位（确认/疑似混合帧帧号清单、近乎完全重复帧、剔除混合帧后的循环区间 spec）；素材无周期性时会明确警告
+- 四个子命令的产物默认写到帧目录的上一级（即 `output/<视频名>/`）
 - 帧号范围写法：单帧 `5`，区间 `1-10`，带步长区间 `1-30:3`，逗号混用 `1-10,15,20-30:2`
 
 ### 网页版 HTTP 接口
@@ -133,6 +136,8 @@
 
 启动后监听 `127.0.0.1`（默认 8765 端口），提供以下 HTTP 接口：
 
+- 单实例：端口即锁，重复运行 `启动网页版.bat` 不会多开——检测到已有实例会直接打开浏览器并退出；想换最新代码需先关闭旧的服务终端窗口（刚关闭时端口可能几十秒内未释放，提示占用稍等再试）
+
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/list` | 列出 `input/` 视频和 `output/` 项目（含帧数） |
@@ -141,6 +146,7 @@
 | POST | `/api/sheet` | JSON `{name, cols?, width?}` → 生成总览拼图，返回 `{url}` |
 | GET | `/api/diff?name=<项目名>` | 帧差异分析，返回统计信息 + `chart_url` |
 | POST | `/api/preview` | JSON `{name, frames: [帧号...], fps}` → 生成预览 GIF，返回 `{url}` |
+| POST | `/api/loop` | JSON `{name, min?, max?, fps?}` → 自动找循环段，返回报告（周期/起止帧/接缝评分/混合帧逐帧清单/去重后循环 spec）+ `strip_url`、`gif_url` |
 | GET | `/out/<项目名>/<文件>`、`/in/<视频文件>` | 静态访问 `output/` 和 `input/` 下的文件 |
 
 出错一律返回 JSON `{"error": "..."}` 及 4xx/5xx 状态码。
@@ -151,7 +157,7 @@
 |---|---|
 | `src/` | 全部脚本与网页界面（代码目录，不散落在根目录） |
 | `src/extract_frames.py` | 抽帧 CLI（ffmpeg 抽帧 + chromakey/colorkey 抠图 + 孔洞填补） |
-| `src/frame_tools.py` | 挑帧辅助 CLI（总览拼图 / 差异分析 / 预览 GIF） |
+| `src/frame_tools.py` | 挑帧辅助 CLI（总览拼图 / 差异分析 / 预览 GIF / 自动找循环） |
 | `src/server.py` / `src/index.html` | 本地网页界面，整合以上全部功能（与命令行共用 `input/` 和 `output/`） |
 | `启动网页版.bat` | Windows 双击启动网页版 |
 | `requirements.txt` | Python 依赖清单，`pip install -r requirements.txt` 一键安装 |
