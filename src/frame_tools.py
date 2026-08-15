@@ -22,8 +22,10 @@
     1,5,9    单帧，逗号分隔，可与区间混用
 
 loop 的原理:
-    把所有帧缩成小灰度图后，枚举候选周期 T，比较"帧i vs 帧i+T"的平均差异，
-    差异最小的 T 即动作周期；再在该周期下找接缝差异（帧s vs 帧s+T）最小的起点。
+    把所有帧缩成小灰度图后，枚举候选周期 T，比较"帧i vs 帧i+T"的差异（按对间
+    动作量加权，静止段在任意 T 下都"吻合"，不参与拉低评分），差异最小的 T 即
+    动作周期；再在该周期下找接缝差异（帧s vs 帧s+T）最小的起点，但段内动作量
+    明显低于全片平均的静止段会被跳过（静止段接缝必然完美，却不是有效循环）。
     若检测到规律性的重复帧（如每 4 帧重复 1 帧），会顺带报告去重建议。
 """
 
@@ -222,26 +224,41 @@ def _small_gray_arrays(frames, height=96):
 def find_loop(arrays, min_t, max_t):
     """在帧序列里找最佳循环段。
 
-    周期: 枚举 T ∈ [min_t, max_t]，"帧i vs 帧i+T"平均差异最小的 T 为动作周期
-          （最小差异 15% 以内取最小的 T，避免选中倍数周期 2T/3T）。
-    起点: 在该周期下取接缝差异（帧s vs 帧s+T）最小的 s。
+    周期: 枚举 T ∈ [min_t, max_t]，比较"帧i vs 帧i+T"差异，按对间动作量加权
+          （静止段在任意 T 下都"吻合"，不加权会把评分拉向小周期），差异最小的
+          T 为动作周期；最佳 T 的约数且差异相当（15% 以内）时取约数，避免选中
+          倍数周期 2T/3T。
+    起点: 在该周期下取接缝差异（帧s vs 帧s+T）最小的 s，但段内动作量明显低于
+          全片平均的静止段不算（静止段接缝必然完美，却不是有效循环）。
     返回 None 表示帧数不足以在指定范围内搜索。
     """
     n = len(arrays)
     max_t = min(max_t, n - 1)
     if max_t < min_t:
         return None
-    ranking = sorted(
-        (float(np.abs(arrays[:-t] - arrays[t:]).mean()), t)
-        for t in range(min_t, max_t + 1)
-    )
-    best = ranking[0][0]
-    period = min(t for score, t in ranking if score <= best * 1.15)
-    seams = np.abs(arrays[:-period] - arrays[period:]).mean(axis=(1, 2))
-    start = int(seams.argmin())
+    adj = np.abs(arrays[:-1] - arrays[1:]).mean(axis=(1, 2))  # adj[i] = 帧i vs 帧i+1
+    csum = np.concatenate([[0.0], np.cumsum(adj)])            # 前缀和，算区间动作量
+
+    def pair_diffs(t):
+        return np.abs(arrays[:-t] - arrays[t:]).mean(axis=(1, 2))
+
+    ranking = []
+    for t in range(min_t, max_t + 1):
+        d = pair_diffs(t)
+        w = (csum[t:n] - csum[:n - t]) / t      # 每对(i, i+t)之间跨过的平均动作量
+        score = float((d * w).sum() / w.sum()) if w.sum() > 1e-6 else float(d.mean())
+        ranking.append((score, t))
+    ranking.sort()
+    best, best_t = ranking[0]
+    period = min(t for score, t in ranking if score <= best * 1.15 and best_t % t == 0)
+    seams = pair_diffs(period)
+    span = max(period - 1, 1)                   # 段[s, s+T)内的相邻差异个数
+    motion = (csum[span:span + len(seams)] - csum[:len(seams)]) / span
+    moving = np.flatnonzero(motion >= adj.mean() * 0.3)
+    start = int(moving[np.argmin(seams[moving])]) if len(moving) else int(seams.argmin())
     return {
         "period": period, "start": start, "seam": float(seams[start]),
-        "adj_avg": float(np.abs(arrays[:-1] - arrays[1:]).mean()),
+        "adj_avg": float(adj.mean()),
         "period_score": best,
         "baseline": float(np.mean([s for s, _ in ranking])),
         "ranking": ranking[:5],
