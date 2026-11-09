@@ -25,7 +25,8 @@
   #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
           gap: 8px; margin-top: 12px; max-height: 520px; overflow-y: auto; }
   .cell { position: relative; cursor: pointer; border: 2px solid transparent;
-          border-radius: 4px; overflow: hidden; background: #ff00ff; }
+          border-radius: 4px; overflow: hidden;
+          background: repeating-conic-gradient(#444 0 25%, #555 0 50%) 0 0 / 16px 16px; }
   .cell img { width: 100%; display: block; }
   .cell .num { position: absolute; left: 0; bottom: 0; background: rgba(0,0,0,.65);
                color: #ffe14d; font-size: 12px; padding: 1px 5px; }
@@ -44,13 +45,13 @@
 <div class="card">
   <div class="row">
     <input type="file" id="file" accept="video/mp4,video/*">
-    <label><input type="checkbox" id="green"> 绿幕抠图</label>
+    <label><input type="checkbox" id="green" checked> 绿幕抠图</label>
   </div>
   <div class="row">
     <span style="font-size:13px;color:#bbb">或直接抽 input/ 里已有的视频（新上传的也会自动收纳进 input/）：</span>
     <select id="videoList"><option value="">（选择已有视频）</option></select>
   </div>
-  <div class="row" id="greenOpts" style="display:none">
+  <div class="row" id="greenOpts">
     <label>幕布颜色
     <input type="text" id="colorHex" value="#00ff00" style="width:80px" title="十六进制颜色，如 #FFFFFF">
     <span style="margin:0 2px 0 8px">R</span><input type="number" id="cR" value="0" min="0" max="255" style="width:56px">
@@ -63,7 +64,7 @@
   </div>
   <div class="row" id="videoRow" style="display:none">
     <video id="video" controls muted style="max-width:480px;max-height:320px;cursor:crosshair"></video>
-    <span style="font-size:13px;color:#bbb">可播放/暂停定位画面，点击画面中任意位置取该点颜色作为幕布颜色</span>
+    <span style="font-size:13px;color:#bbb">原视频取色区 · 暂停后点击画面选取幕布颜色。抽帧结果见下方缩略图。</span>
   </div>
   <div class="row">
     <button id="btnExtract">开始抽帧</button><span id="status"></span>
@@ -106,6 +107,7 @@
 <script>
 const $ = id => document.getElementById(id);
 let frames = [], selected = new Set(), current = "";
+let frameVersion = 0;
 
 const pad = n => String(n).padStart(5, '0');
 const esc = s => s.replace(/[&<>"']/g, c =>
@@ -129,8 +131,10 @@ const setCurrent = name => { current = name;
 // 拉取 input/ 视频列表和 output/ 项目列表，填充两个下拉框
 async function refreshLists() {
   const d = await (await fetch('/api/list')).json();
+  const selectedVideo = $('videoList').value;
   $('videoList').innerHTML = '<option value="">（选择已有视频）</option>' +
     d.videos.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  if (d.videos.includes(selectedVideo)) $('videoList').value = selectedVideo;
   $('projList').innerHTML = '<option value="">（选择已有项目）</option>' +
     d.projects.map(p => `<option value="${esc(p.name)}">${esc(p.name)}（${p.frames} 帧）</option>`).join('');
 }
@@ -245,6 +249,8 @@ $('btnOpen').onclick = async () => {  // 打开 output/ 里已有的项目继续
 async function loadFrames() {
   const d = await (await fetch('/api/frames?name=' + encodeURIComponent(current))).json();
   frames = d.frames; selected = new Set(frames);
+  frameVersion = Date.now();
+  for (const id of ['sheetBox', 'diffBox', 'loopBox', 'gifBox']) $(id).replaceChildren();
   if (!frames.length) status(`output/${current}/frames/ 里没有帧，请先抽帧`, true);
   renderGrid();
 }
@@ -252,7 +258,7 @@ async function loadFrames() {
 function renderGrid() {
   $('grid').innerHTML = frames.map(n =>
     `<div class="cell ${selected.has(n) ? 'sel' : ''}" data-n="${n}">
-       <img loading="lazy" src="/out/${encodeURIComponent(current)}/frames/frame_${pad(n)}.png"><span class="num">${n}</span>
+       <img loading="lazy" src="/out/${encodeURIComponent(current)}/frames/frame_${pad(n)}.png?v=${frameVersion}"><span class="num">${n}</span>
      </div>`).join('');
   document.querySelectorAll('.cell').forEach(c => c.onclick = () => {
     const n = +c.dataset.n;

@@ -189,17 +189,21 @@ def parse_spec(spec, valid_nums):
 
 
 def _gif_ready(im):
-    """GIF 不能表现 alpha，透明背景衬洋红。"""
-    if im.mode == "RGBA":
-        bg = Image.new("RGB", im.size, (255, 0, 255))
-        bg.paste(im, mask=im.split()[3])
-        im = bg
-    return im.convert("RGB")
+    """GIF 只支持全透明或不透明，保留一个调色板索引表示透明。"""
+    rgba = im.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    if alpha.getextrema()[0] == 255:
+        return rgba.convert("RGB")
+    frame = rgba.convert("RGB").quantize(colors=255)
+    frame.putpalette(frame.getpalette() + [0] * (768 - len(frame.getpalette())))
+    frame.paste(255, mask=alpha.point(lambda a: 255 if a < 128 else 0))
+    frame.info["transparency"] = 255
+    return frame
 
 
 def _save_gif(images, out, fps):
     images[0].save(out, save_all=True, append_images=images[1:],
-                   duration=int(1000 / fps), loop=0)
+                   duration=int(1000 / fps), loop=0, disposal=2, optimize=False)
 
 
 def cmd_preview(frames_dir, spec, fps, out):
